@@ -5,20 +5,24 @@ import pandas as pd
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
 from nltk.corpus import stopwords
+from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
 
 csv_path = 'customer-complaints.csv'
 # Inhalt der CSV-Datei lesen und die ersten 5000 Zeilen berücksichtigen
 df = pd.read_csv(csv_path, nrows=5000)
 
+#Ausgabe der ersten 10 Beschwerden
+print("Ausgabe der erste 10 Beschwerden vor der Bereinigung")
+issues = df['Issue'][0:10]
+for idx, issue in enumerate(issues, start=1):
+    print(f"{idx}: {issue}")
+
 # Bereinigung der Beschwerde-Daten
 # Schritt 1: Umwandlung des Textes in Kleinbuchstaben
 df['Issue'] = df['Issue'].str.lower()
-df.to_csv('schritt1_kleinbuchstaben.csv', index=False)
-
 
 # Schritt 2: Tokenisierung des Textes
 df['Issue'] = df['Issue'].apply(lambda x: word_tokenize(str(x)))
-df.to_csv('schritt2_tokenisierung.csv', index=False)
 
 # Schritt 3: Entfernen der englischen Stoppwörter
 def stops_removal(text):
@@ -27,10 +31,43 @@ def stops_removal(text):
     return text
 df['Issue'] = df['Issue'].apply(stops_removal)
 df['Issue'] = df['Issue'].apply(word_tokenize)
-df.to_csv('schritt3_stoppwörter_entfernen.csv', index=False)
 
 # Schritt 4: Die Wörter werden lemmatisiert
 lmtzr = WordNetLemmatizer()
 df['Issue'] = df['Issue'].apply(lambda x: [lmtzr.lemmatize(z) for z in x])
-df.to_csv('schritt4_lemmatisierung.csv', index=False)
 
+#Ausgabe der ersten 10 Beschwerden nach der Bereinigung
+print("\n\nAusgabe der erste 10 Beschwerden nach der Bereinigung")
+issues = df['Issue'][0:10]
+for idx, issue in enumerate(issues, start=1):
+    print(f"{idx}: {issue}")
+
+
+# Formatierung der Beschwerden, um den Wortschatz zu erstellen
+# Leere Dokumente herausfiltern
+complaints = [' '.join(row) for row in df['Issue']]  
+complaints_df = pd.DataFrame({'Issue': complaints})
+
+# Überprüfen, ob es leere Dokumente gibt
+if len(complaints) == 0:
+    raise ValueError("Alle Dokumente sind leer nach der Bereinigung.")
+
+# 1. Vektorisierung / Erstellung des Bag of Words mit CountVectorizer 
+vect = CountVectorizer()
+data = vect.fit_transform(complaints)
+data_df = pd.DataFrame(data.toarray(), columns=vect.get_feature_names_out())
+
+# 2. Vektorisierung / TF-IDF
+vectorizer = TfidfVectorizer(min_df=1)
+model = vectorizer.fit_transform(complaints)
+data_TF_IDF = pd.DataFrame(model.toarray(), columns=vectorizer.get_feature_names_out())
+
+# Häufigste Wörter im Bag of Words
+bow_word_counts = data_df.sum().sort_values(ascending=False).head(10)
+print("\n\nHäufigste Wörter im Bag of Words:")
+print(bow_word_counts)
+
+# Wörter mit den höchsten TF-IDF-Werten
+tfidf_word_scores = data_TF_IDF.sum().sort_values(ascending=False).head(10)
+print("\n\nWörter mit den höchsten TF-IDF-Werten:")
+print(tfidf_word_scores)
