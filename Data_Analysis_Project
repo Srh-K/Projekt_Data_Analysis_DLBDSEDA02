@@ -2,5 +2,35 @@ import re
 import nltk
 import pandas as pd
 
+from nltk.tokenize import word_tokenize
+from nltk.stem import WordNetLemmatizer
+from nltk.corpus import stopwords
 
+csv_path = 'customer-complaints.csv'
+# Inhalt der CSV-Datei lesen und die ersten 5000 Zeilen berücksichtigen
+df = pd.read_csv(csv_path, nrows=5000)
+
+# Bereinigung der Beschwerde-Daten
+# Schritt 1: Umwandlung des Textes in Kleinbuchstaben
+df['Issue'] = df['Issue'].str.lower()
+df.to_csv('schritt1_kleinbuchstaben.csv', index=False)
+
+
+# Schritt 2: Tokenisierung des Textes
+df['Issue'] = df['Issue'].apply(lambda x: word_tokenize(str(x)))
+df.to_csv('schritt2_tokenisierung.csv', index=False)
+
+# Schritt 3: Entfernen der englischen Stoppwörter
+def stops_removal(text):
+    t = [token for token in text if token not in stopwords.words("english")]
+    text = ' '.join(t)
+    return text
+df['Issue'] = df['Issue'].apply(stops_removal)
+df['Issue'] = df['Issue'].apply(word_tokenize)
+df.to_csv('schritt3_stoppwörter_entfernen.csv', index=False)
+
+# Schritt 4: Die Wörter werden lemmatisiert
+lmtzr = WordNetLemmatizer()
+df['Issue'] = df['Issue'].apply(lambda x: [lmtzr.lemmatize(z) for z in x])
+df.to_csv('schritt4_lemmatisierung.csv', index=False)
 
