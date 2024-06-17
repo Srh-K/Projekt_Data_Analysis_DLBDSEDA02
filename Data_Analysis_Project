@@ -21,6 +21,15 @@ for idx, issue in enumerate(issues, start=1):
 # Schritt 1: Umwandlung des Textes in Kleinbuchstaben
 df['Issue'] = df['Issue'].str.lower()
 
+# Sonderzeichen entfernen, außer Apostroph
+df['Issue'] = df['Issue'].apply(lambda x: re.sub(r"[^\w\s']", '', x))
+
+# Funktion zum Entfernen des Possessiv-Suffix ('s)
+def remove_possessive(text):
+    # Entfernt 's am Ende eines Wortes, wenn es direkt von einem Buchstaben gefolgt wird
+    return re.sub(r"'s\b", "", text)
+df['Issue'] = df['Issue'].apply(remove_possessive)
+
 # Schritt 2: Tokenisierung des Textes
 df['Issue'] = df['Issue'].apply(lambda x: word_tokenize(str(x)))
 
