@@ -1,60 +1,77 @@
 import re
 import nltk
 import pandas as pd
+import matplotlib.pyplot as plt
+import numpy as np
 
 from nltk.tokenize import word_tokenize
 from nltk.stem import WordNetLemmatizer
-from nltk.corpus import stopwords
-from sklearn.feature_extraction.text import CountVectorizer,TfidfVectorizer
+from nltk.corpus import stopwords, wordnet
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.decomposition import TruncatedSVD, LatentDirichletAllocation
+from gensim.corpora import Dictionary
+from gensim.models.ldamodel import LdaModel
+from gensim.models.coherencemodel import CoherenceModel
+from tabulate import tabulate
+from keybert import KeyBERT
+from gensim.matutils import Sparse2Corpus
+from scipy.sparse import csr_matrix
 
+# Laden der NLTK-Ressourcen
+nltk.download('punkt')
+nltk.download('stopwords')
+nltk.download('wordnet')
+
+
+# Inhalt der CSV-Datei lesen und die ersten 2000 Zeilen berücksichtigen
 csv_path = 'customer-complaints.csv'
-# Inhalt der CSV-Datei lesen und die ersten 5000 Zeilen berücksichtigen
-df = pd.read_csv(csv_path, nrows=5000)
+df = pd.read_csv(csv_path, nrows=2000)
 
 #Ausgabe der ersten 10 Beschwerden
-print("Ausgabe der erste 10 Beschwerden vor der Bereinigung")
+print("Ausgabe der ersten 10 Beschwerden vor der Bereinigung")
 issues = df['Issue'][0:10]
 for idx, issue in enumerate(issues, start=1):
     print(f"{idx}: {issue}")
 
 # Bereinigung der Beschwerde-Daten
+# Sonderzeichen (außer Apostroph) und "'s" entfernen
+df['Issue'] = df['Issue'].apply(lambda x: re.sub(r"'s\b", "", re.sub(r"[^\w\s']", '', x)))
+
 # Schritt 1: Umwandlung des Textes in Kleinbuchstaben
 df['Issue'] = df['Issue'].str.lower()
-
-# Sonderzeichen entfernen, außer Apostroph
-df['Issue'] = df['Issue'].apply(lambda x: re.sub(r"[^\w\s']", '', x))
-
-# Funktion zum Entfernen des Possessiv-Suffix ('s)
-def remove_possessive(text):
-    # Entfernt 's am Ende eines Wortes, wenn es direkt von einem Buchstaben gefolgt wird
-    return re.sub(r"'s\b", "", text)
-df['Issue'] = df['Issue'].apply(remove_possessive)
 
 # Schritt 2: Tokenisierung des Textes
 df['Issue'] = df['Issue'].apply(lambda x: word_tokenize(str(x)))
 
-# Schritt 3: Entfernen der englischen Stoppwörter
-def stops_removal(text):
-    t = [token for token in text if token not in stopwords.words("english")]
-    text = ' '.join(t)
-    return text
-df['Issue'] = df['Issue'].apply(stops_removal)
-df['Issue'] = df['Issue'].apply(word_tokenize)
+# Schritt 3: Entfernen der englischen Stoppwörter / Erweiterung der Stoppwortliste um "ca n't"
+stop_words = set(stopwords.words("english")).union({"ca", "n't"})
+df['Issue'] = df['Issue'].apply(lambda x: [token for token in x if token not in stop_words])
 
-# Schritt 4: Die Wörter werden lemmatisiert
-lmtzr = WordNetLemmatizer()
-df['Issue'] = df['Issue'].apply(lambda x: [lmtzr.lemmatize(z) for z in x])
+
+# Funktion zum Bestimmen des POS-Tags
+def get_wordnet_pos(word):
+    """Map POS tag to first character lemmatize() accepts"""
+    tag = nltk.pos_tag([word])[0][1][0].upper()
+    tag_dict = {"J": wordnet.ADJ,
+                "N": wordnet.NOUN,
+                "V": wordnet.VERB,
+                "R": wordnet.ADV}
+    return tag_dict.get(tag, wordnet.NOUN)
+
+# Funktion zur Lemmatisierung mit Berücksichtigung des POS-Tags
+def lemmatize_text(tokens):
+    lemmatizer = WordNetLemmatizer()
+    return [lemmatizer.lemmatize(token, get_wordnet_pos(token)) for token in tokens]
+df['Issue'] = df['Issue'].apply(lemmatize_text)
 
 #Ausgabe der ersten 10 Beschwerden nach der Bereinigung
-print("\n\nAusgabe der erste 10 Beschwerden nach der Bereinigung")
+print("\n\nAusgabe der ersten 10 Beschwerden nach der Bereinigung")
 issues = df['Issue'][0:10]
 for idx, issue in enumerate(issues, start=1):
     print(f"{idx}: {issue}")
 
-
 # Formatierung der Beschwerden, um den Wortschatz zu erstellen
-# Leere Dokumente herausfiltern
-complaints = [' '.join(row) for row in df['Issue']]  
+complaints = [' '.join(row) for row in df['Issue']]
 complaints_df = pd.DataFrame({'Issue': complaints})
 
 # Überprüfen, ob es leere Dokumente gibt
@@ -68,15 +85,173 @@ data_df = pd.DataFrame(data.toarray(), columns=vect.get_feature_names_out())
 
 # 2. Vektorisierung / TF-IDF
 vectorizer = TfidfVectorizer(min_df=1)
-model = vectorizer.fit_transform(complaints)
-data_TF_IDF = pd.DataFrame(model.toarray(), columns=vectorizer.get_feature_names_out())
+data_vectorized = vectorizer.fit_transform(complaints)
+data_TF_IDF = pd.DataFrame(data_vectorized.toarray(), columns=vectorizer.get_feature_names_out())
 
 # Häufigste Wörter im Bag of Words
-bow_word_counts = data_df.sum().sort_values(ascending=False).head(10)
+bow_word_counts = data_df.sum().sort_values(ascending=False).head(20)
 print("\n\nHäufigste Wörter im Bag of Words:")
 print(bow_word_counts)
 
 # Wörter mit den höchsten TF-IDF-Werten
-tfidf_word_scores = data_TF_IDF.sum().sort_values(ascending=False).head(10)
+tfidf_word_scores = data_TF_IDF.sum().sort_values(ascending=False).head(20)
 print("\n\nWörter mit den höchsten TF-IDF-Werten:")
 print(tfidf_word_scores)
+
+
+# Erstellen der Subplots
+ig, axes = plt.subplots(1, 2, figsize=(14, 7))
+
+# Plot für Bag of Words
+axes[0].barh(bow_word_counts.index[::-1], bow_word_counts.values[::-1])
+axes[0].set_title('Häufigste Wörter (Bag of Words)')
+axes[0].set_xlabel('Häufigkeit')
+axes[0].set_ylabel('Wörter')
+
+# Plot für TF-IDF
+axes[1].barh(tfidf_word_scores.index[::-1], tfidf_word_scores.values[::-1])
+axes[1].set_title('Häufigste Wörter (TF-IDF)')
+axes[1].set_xlabel('Wert')
+axes[1].set_ylabel('Wörter')
+
+# Gensim Dictionary und Corpus erstellen
+dictionary = Dictionary(df['Issue'])
+corpus = [dictionary.doc2bow(text) for text in df['Issue']]
+
+#LDA durchführen und formatieren
+lda_model = LatentDirichletAllocation(n_components=5, random_state=42)
+lda_model.fit_transform(data_vectorized)
+lda_topics = lda_model.components_
+
+ # Funktion zum Formatieren der Topics & Wahrscheinlichkeiten
+def format_topics(topics, feature_names, model_name, n_top_words=10):
+    headers_words = ["Wort " + str(i+1) for i in range(n_top_words)]
+    headers_probs = ["Wahrscheinlichkeit " + str(i+1) for i in range(n_top_words)]
+    topics_words = []
+    topics_probs = []
+    
+    for topic in topics:
+        top_words_indices = topic.argsort()[:-n_top_words - 1:-1]
+        topics_words.append([feature_names[i] for i in top_words_indices])
+        topics_probs.append([topic[i] / topic.sum() for i in top_words_indices])  # Normalisierung zur Wahrscheinlichkeit
+    
+    topics_df = pd.DataFrame(topics_words, columns=headers_words)
+    topics_df.index = [f"Topic {i+1}" for i in range(len(topics))]
+    
+    print(f"\n{model_name} Topics (Wörter):\n")
+    print(tabulate(topics_df, headers='keys', tablefmt='pretty'))
+    
+    probs_df = pd.DataFrame(topics_probs, columns=headers_probs)
+    probs_df.index = [f"Topic {i+1}" for i in range(len(topics))]
+    
+    print(f"\n{model_name} Topics (Wahrscheinlichkeiten):\n")
+    print(tabulate(probs_df, headers='keys', tablefmt='pretty'))
+
+
+# Aufruf der Funktion mit angepassten Indizes
+feature_names = vectorizer.get_feature_names_out()
+format_topics(lda_topics, feature_names, "LDA", n_top_words=10)
+
+# Kohärenzwert für LDA-Modell berechnen
+lda_model = LdaModel(corpus=corpus, id2word=dictionary, num_topics=5, random_state=42, update_every=1, passes=10, alpha='auto', per_word_topics=True)
+coherence_model_lda = CoherenceModel(model=lda_model, texts=df['Issue'], dictionary=dictionary, coherence='c_v')
+coherence_lda = coherence_model_lda.get_coherence()
+print(f"\nKohärenzwert des LDA-Modells: {coherence_lda}")
+
+# Berechnung der Kohärenzwerte für jedes Thema
+# Kohärenzwert für LDA-Modell berechnen mit Gensim LDA
+coherence_lda_topic = coherence_model_lda.get_coherence_per_topic()
+print('Kohärenzwerte pro Thema: ', coherence_lda_topic, '\n')
+
+# LSA-Modell (TruncatedSVD) anpassen
+lsa_model = TruncatedSVD(n_components=5, random_state=42)
+lsa_top = lsa_model.fit_transform(data_vectorized)
+lsa_topics = lsa_model.components_
+
+# Funktion zur Formatierung der Topics & Gewichtungen
+def format_topics_lsa(topics, feature_names, model_name, n_top_words=10):
+    headers = [f"Wort {i+1}" for i in range(n_top_words)]
+    topics_words = []
+    topics_weights = []  # Hier werden die Gewichtungen der Wörter gespeichert
+    
+    for topic_idx, topic in enumerate(topics):
+        top_indices = topic.argsort()[:-n_top_words - 1:-1]
+        topics_words.append([feature_names[i] for i in top_indices])
+        topics_weights.append([topic[i] for i in top_indices])
+        
+    # Erstellen von DataFrames für Wörter und Gewichtungen
+    topics_df = pd.DataFrame(topics_words, columns=headers)
+    topics_df.index = [f"Topic {i+1}" for i in range(len(topics))]
+        
+    weights_df = pd.DataFrame(topics_weights, columns=headers)
+    weights_df.index = [f"Topic {i+1}" for i in range(len(topics))]
+        
+    print(f"\n{model_name} Topics (Wörter):\n")
+    print(tabulate(topics_df, headers='keys', tablefmt='pretty'))
+        
+    print(f"\n{model_name} Topics (Gewichtungen):\n")
+    print(tabulate(weights_df, headers='keys', tablefmt='pretty'))
+    return topics_df, weights_df
+
+format_topics_lsa(lsa_topics, feature_names, "LSA", n_top_words=10)
+
+# Funktion zur Berechnung Kohärenzwert für LSA-Modell berechnen
+def calculate_coherence_lda_to_lsa(lsa_model, corpus, texts, dictionary, n_topics=5, n_top_words=10):
+    topics = lsa_model.components_
+    top_words = []
+    
+    for topic in topics:
+        top_words_indices = topic.argsort()[:-n_top_words - 1:-1]
+        top_words.append([dictionary[i] for i in top_words_indices])
+    
+    coherence_model_lsa = CoherenceModel(topics=top_words, texts=texts, dictionary=dictionary, coherence='c_v')
+    coherence_lsa = coherence_model_lsa.get_coherence()
+    return coherence_lsa
+
+# Funktion zur Berechnung der Kohärenz pro Thema für LSA
+def calculate_coherence_per_topic_lsa(lsa_model, corpus, texts, dictionary, n_topics=5, n_top_words=10):
+    topics = lsa_model.components_
+    top_words = []
+    
+    for topic in topics:
+        top_words_indices = topic.argsort()[:-n_top_words - 1:-1]
+        top_words.append([dictionary[i] for i in top_words_indices])
+    
+    coherence_values = []
+    
+    for i, topic_words in enumerate(top_words):
+        coherence_model_topic = CoherenceModel(topics=[topic_words], texts=texts, dictionary=dictionary, coherence='c_v')
+        coherence_topic = coherence_model_topic.get_coherence()
+        coherence_values.append(coherence_topic)
+        
+    print('\nKohärenzwerte pro Thema: ', coherence_lda_topic)
+    return coherence_values
+
+# Corpus in das richtige Format für Gensim konvertieren
+corpus_sparse = csr_matrix(lsa_top)  # Konvertiere numpy.ndarray in eine sparse Matrix
+corpus_gensim = Sparse2Corpus(corpus_sparse, documents_columns=False)
+
+tokenized_docs = df['Issue'].tolist() 
+coherence_values_lsa = calculate_coherence_per_topic_lsa(lsa_model, corpus_gensim, tokenized_docs, dictionary, n_topics=5, n_top_words=10)
+
+# Kohärenzwert für LSA
+coherence_lsa = calculate_coherence_lda_to_lsa(lsa_model, corpus, df['Issue'], dictionary, n_topics=5, n_top_words=10)
+print(f"Kohärenzwert des LSA-Modells: {coherence_lsa}")
+
+# Initialisierung des KeyBERT-Modells
+kw_model = KeyBERT()
+
+# Extraktion der Keywords für jede Beschwerde und Speicherung in einer neuen Spalte 'Keywords'
+complaints_df['Keywords'] = complaints_df['Issue'].apply(lambda x: kw_model.extract_keywords(x, keyphrase_ngram_range=(1, 1)))
+
+# Extrahieren und Transformieren der Keywords in eine flache Liste
+keywords_flat = [keyword for sublist in complaints_df['Keywords'].tolist() for keyword, _ in sublist]
+
+# Berechnung der Häufigkeit der Schlüsselwörter
+keyword_freq = pd.Series(keywords_flat).value_counts().head(10)
+
+# Anzeige der extrahierten Schlüsselwörter für die ersten 5 Beschwerden
+print("\nExtrahierte Schlüsselwörter für die ersten 5 Beschwerden (KeyBERT):")
+for idx, row in complaints_df.head(5).iterrows():
+    keywords_list = ", ".join([f"({kw}, {score:.4f})" for kw, score in row['Keywords']])
+    print(f"{idx + 1}  {row['Issue']: <30} {keywords_list}")
